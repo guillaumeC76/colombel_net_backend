@@ -73,26 +73,36 @@ exports.getLeaderboard = async (req, res) => {
     }
 
     const leaderboard = await Score.aggregate([
-      // 1. Trier par score décroissant et date ascendante
-      { $sort: { value: -1} },
-
-      // 2. Grouper par utilisateur en gardant le document complet du meilleur score
+      // 1. Ajouter un champ précision sur chaque document
       {
-        $group: {
-          _id: "$user",
-          bestDoc: { $first: "$$ROOT" },
-          totalScores: { $sum: "$value" },
-          totalMissedClicks: { $sum: "$missedClicks" },
+        $addFields: {
+          precision: {
+            $multiply: [
+              { $divide: [{ $subtract: ["$value", "$missedClicks"] }, "$value"] },
+              100,
+            ],
+          },
         },
       },
 
-      // 3. Trier les groupes par meilleur score (optionnel)
-      { $sort: { "bestDoc.value": -1, "bestDoc.missedClicks": 1} },
+      // 2. Trier d'abord par score décroissant puis par précision décroissante
+      { $sort: { value: -1, precision: -1 } },
 
-      // 4. Limiter à 25 utilisateurs
+      // 3. Grouper par utilisateur en gardant le meilleur score avec la meilleure précision
+      {
+        $group: {
+          _id: "$user",
+          bestDoc: { $first: "$$ROOT" }, // On prend le premier après le tri (meilleur score et meilleure précision)
+        },
+      },
+
+      // 4. Trier les groupes par meilleur score (optionnel)
+      { $sort: { "bestDoc.value": -1 } },
+
+      // 5. Limiter à 25 utilisateurs
       { $limit: 25 },
 
-      // 5. Jointure avec la collection users
+      // 6. Jointure avec la collection users
       {
         $lookup: {
           from: "users",
@@ -102,10 +112,10 @@ exports.getLeaderboard = async (req, res) => {
         },
       },
 
-      // 6. Décomposer le tableau issu du lookup
+      // 7. Décomposer le tableau issu du lookup
       { $unwind: "$userDetails" },
 
-      // 7. Projeter les champs désirés
+      // 8. Projeter les champs désirés
       {
         $project: {
           _id: 0,
@@ -113,22 +123,7 @@ exports.getLeaderboard = async (req, res) => {
           bestScore: "$bestDoc.value",
           bestScoreDate: "$bestDoc.date",
           missedClicks: "$bestDoc.missedClicks",
-          precisionGlobal: {
-            $round: [
-              {
-                $multiply: [
-                  {
-                    $divide: [
-                      "$totalScores",
-                      { $add: ["$totalScores", "$totalMissedClicks"] },
-                    ],
-                  },
-                  100,
-                ],
-              },
-              2,
-            ],
-          },
+          precision: { $round: ["$bestDoc.precision", 2] }, // Arrondi à 2 décimales
         },
       },
     ]);
@@ -143,3 +138,4 @@ exports.getLeaderboard = async (req, res) => {
     });
   }
 };
+
